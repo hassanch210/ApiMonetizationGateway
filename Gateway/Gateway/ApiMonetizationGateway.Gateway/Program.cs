@@ -99,13 +99,13 @@ builder.Services.AddCors(options =>
     });
 });
 
-// JWT Authentication configuration
-var jwtKey = builder.Configuration["Jwt:Key"];
-var jwtIssuer = builder.Configuration["Jwt:Issuer"];
-var jwtAudience = builder.Configuration["Jwt:Audience"];
+// JWT Authentication configuration (middleware-based, values from env/secret manager)
+var jwtKey = Environment.GetEnvironmentVariable("JWT__KEY") ?? "ThisIsMySecretKeyForJWTTokenGenerationAndShouldBeAtLeast256Bits";
+var jwtIssuer = Environment.GetEnvironmentVariable("JWT__ISSUER") ?? "ApiMonetizationGateway";
+var jwtAudience = Environment.GetEnvironmentVariable("JWT__AUDIENCE") ?? "ApiMonetizationGatewayUsers";
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer("Bearer", options =>
+    .AddJwtBearer(options =>
     {
         options.TokenValidationParameters = new TokenValidationParameters
         {
@@ -115,11 +115,16 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = jwtIssuer,
             ValidAudience = jwtAudience,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey!))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
         };
     });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
 
 var app = builder.Build();
 
@@ -127,18 +132,7 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "API Gateway v1");
-        c.RoutePrefix = "swagger";
-        c.DocumentTitle = "API Monetization Gateway - Main Gateway";
-        c.DefaultModelsExpandDepth(-1);
-        c.DefaultModelExpandDepth(2);
-        c.DisplayRequestDuration();
-        
-        // Add links to individual service Swagger UIs
-        c.ConfigObject.AdditionalItems.Add("syntaxHighlight", new Dictionary<string, object> { { "activated", true } });
-    });
+    app.UseSwaggerUI(c => { c.SwaggerEndpoint("/swagger/v1/swagger.json", "API Gateway v1"); c.RoutePrefix = string.Empty; });
 }
 
 app.UseHttpsRedirection();

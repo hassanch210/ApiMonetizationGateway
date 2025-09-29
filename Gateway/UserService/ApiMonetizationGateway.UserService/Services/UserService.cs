@@ -26,29 +26,17 @@ public class UserService : IUserService
                 return ApiResponse<UserDto>.CreateError("User with this email already exists");
             }
 
-            // Validate tier exists
-            var tier = await _context.Tiers.FindAsync(request.TierId);
-            if (tier == null || !tier.IsActive)
-            {
-                return ApiResponse<UserDto>.CreateError("Invalid or inactive tier");
-            }
-
             var user = new User
             {
                 Email = request.Email,
                 FirstName = request.FirstName,
                 LastName = request.LastName,
-                TierId = request.TierId,
-                ApiKey = GenerateApiKey(),
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
 
             _context.Users.Add(user);
             await _context.SaveChangesAsync();
-
-            // Load the tier for the response
-            user.Tier = tier;
 
             return ApiResponse<UserDto>.CreateSuccess(MapToDto(user), "User created successfully");
         }
@@ -63,7 +51,6 @@ public class UserService : IUserService
         try
         {
             var user = await _context.Users
-                .Include(u => u.Tier)
                 .FirstOrDefaultAsync(u => u.Id == id && u.IsActive);
 
             return ApiResponse<UserDto?>.CreateSuccess(user != null ? MapToDto(user) : null);
@@ -74,28 +61,13 @@ public class UserService : IUserService
         }
     }
 
-    public async Task<ApiResponse<UserDto?>> GetUserByApiKeyAsync(string apiKey)
-    {
-        try
-        {
-            var user = await _context.Users
-                .Include(u => u.Tier)
-                .FirstOrDefaultAsync(u => u.ApiKey == apiKey && u.IsActive);
-
-            return ApiResponse<UserDto?>.CreateSuccess(user != null ? MapToDto(user) : null);
-        }
-        catch (Exception ex)
-        {
-            return ApiResponse<UserDto?>.CreateError($"Error retrieving user: {ex.Message}");
-        }
-    }
+    // Removed API key lookup
 
     public async Task<ApiResponse<UserDto?>> GetUserByEmailAsync(string email)
     {
         try
         {
             var user = await _context.Users
-                .Include(u => u.Tier)
                 .FirstOrDefaultAsync(u => u.Email == email && u.IsActive);
 
             return ApiResponse<UserDto?>.CreateSuccess(user != null ? MapToDto(user) : null);
@@ -111,7 +83,6 @@ public class UserService : IUserService
         try
         {
             var users = await _context.Users
-                .Include(u => u.Tier)
                 .Where(u => u.IsActive)
                 .Select(u => MapToDto(u))
                 .ToListAsync();
@@ -128,7 +99,7 @@ public class UserService : IUserService
     {
         try
         {
-            var user = await _context.Users.Include(u => u.Tier).FirstOrDefaultAsync(u => u.Id == id);
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == id);
             if (user == null)
             {
                 return ApiResponse<UserDto>.CreateError("User not found");
@@ -140,18 +111,9 @@ public class UserService : IUserService
                 return ApiResponse<UserDto>.CreateError("Email already in use by another user");
             }
 
-            // Validate tier exists
-            var tier = await _context.Tiers.FindAsync(request.TierId);
-            if (tier == null || !tier.IsActive)
-            {
-                return ApiResponse<UserDto>.CreateError("Invalid or inactive tier");
-            }
-
             user.Email = request.Email;
             user.FirstName = request.FirstName;
             user.LastName = request.LastName;
-            user.TierId = request.TierId;
-            user.Tier = tier;
             user.UpdatedAt = DateTime.UtcNow;
 
             await _context.SaveChangesAsync();
@@ -186,48 +148,11 @@ public class UserService : IUserService
         }
     }
 
-    public async Task<ApiResponse<string>> RegenerateApiKeyAsync(int id)
-    {
-        try
-        {
-            var user = await _context.Users.FindAsync(id);
-            if (user == null)
-            {
-                return ApiResponse<string>.CreateError("User not found");
-            }
+    // Removed API key regeneration
 
-            user.ApiKey = GenerateApiKey();
-            user.UpdatedAt = DateTime.UtcNow;
-            await _context.SaveChangesAsync();
+    // Removed API key validation
 
-            return ApiResponse<string>.CreateSuccess(user.ApiKey, "API key regenerated successfully");
-        }
-        catch (Exception ex)
-        {
-            return ApiResponse<string>.CreateError($"Error regenerating API key: {ex.Message}");
-        }
-    }
-
-    public async Task<ApiResponse<bool>> ValidateApiKeyAsync(string apiKey)
-    {
-        try
-        {
-            var exists = await _context.Users.AnyAsync(u => u.ApiKey == apiKey && u.IsActive);
-            return ApiResponse<bool>.CreateSuccess(exists);
-        }
-        catch (Exception ex)
-        {
-            return ApiResponse<bool>.CreateError($"Error validating API key: {ex.Message}");
-        }
-    }
-
-    private static string GenerateApiKey()
-    {
-        using var rng = RandomNumberGenerator.Create();
-        var bytes = new byte[32];
-        rng.GetBytes(bytes);
-        return Convert.ToBase64String(bytes).Replace("/", "_").Replace("+", "-").Replace("=", "");
-    }
+    // Removed API key generator
 
     private static UserDto MapToDto(User user)
     {
@@ -237,19 +162,9 @@ public class UserService : IUserService
             Email = user.Email,
             FirstName = user.FirstName,
             LastName = user.LastName,
-            ApiKey = user.ApiKey,
+            ApiKey = null,
             CreatedAt = user.CreatedAt,
-            IsActive = user.IsActive,
-            Tier = new TierDto
-            {
-                Id = user.Tier.Id,
-                Name = user.Tier.Name,
-                Description = user.Tier.Description,
-                MonthlyQuota = user.Tier.MonthlyQuota,
-                RateLimit = user.Tier.RateLimit,
-                MonthlyPrice = user.Tier.MonthlyPrice,
-                IsActive = user.Tier.IsActive
-            }
+            IsActive = user.IsActive
         };
     }
 }

@@ -80,10 +80,7 @@ services:
       - apimonetization-network
 
   tierservice:
-    build:
-      context: .
-      dockerfile: src/TierService/ApiMonetizationGateway.TierService/Dockerfile
-    container_name: apimonetization-tierservice
+    # Tier service removed
     ports:
       - "5002:8080"
     environment:
@@ -127,10 +124,7 @@ services:
       - apimonetization-network
 
   sampleapi:
-    build:
-      context: .
-      dockerfile: src/SampleApiService/ApiMonetizationGateway.SampleApi/Dockerfile
-    container_name: apimonetization-sampleapi
+    # Sample API service removed
     ports:
       - "5010:8080"
     environment:

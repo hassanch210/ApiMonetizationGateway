@@ -1,5 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using ApiMonetizationGateway.Shared.Data;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 using ApiMonetizationGateway.BillingService.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -72,21 +75,40 @@ builder.Services.AddCors(options =>
     });
 });
 
+// JWT Authentication configuration
+var jwtKey = builder.Configuration["Jwt:Key"];
+var jwtIssuer = builder.Configuration["Jwt:Issuer"];
+var jwtAudience = builder.Configuration["Jwt:Audience"];
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtIssuer,
+            ValidAudience = jwtAudience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey!))
+        };
+    });
+
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Billing Service API v1");
-        c.RoutePrefix = "swagger";
-        c.DocumentTitle = "API Monetization Gateway - Billing Service";
-        c.DefaultModelsExpandDepth(-1);
-        c.DefaultModelExpandDepth(2);
-        c.DisplayRequestDuration();
-    });
+    app.UseSwaggerUI(c => { c.SwaggerEndpoint("/swagger/v1/swagger.json", "Billing Service API v1"); c.RoutePrefix = string.Empty; });
 }
 
 // Run database migrations automatically
@@ -99,6 +121,9 @@ using (var scope = app.Services.CreateScope())
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
 app.UseRouting();
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 

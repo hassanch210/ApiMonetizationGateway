@@ -21,7 +21,6 @@ public class BillingService : IBillingService
     {
         try
         {
-            // Check if summary already exists
             var existingSummary = await _context.MonthlyUsageSummaries
                 .FirstOrDefaultAsync(s => s.UserId == userId && s.Year == year && s.Month == month);
 
@@ -30,9 +29,7 @@ public class BillingService : IBillingService
                 return ApiResponse<MonthlyUsageSummary>.CreateError("Monthly summary already exists for this period");
             }
 
-            // Get user and tier information
             var user = await _context.Users
-                .Include(u => u.Tier)
                 .FirstOrDefaultAsync(u => u.Id == userId);
 
             if (user == null)
@@ -40,7 +37,17 @@ public class BillingService : IBillingService
                 return ApiResponse<MonthlyUsageSummary>.CreateError("User not found");
             }
 
-            // Calculate usage statistics
+            var activeTierId = await _context.UserTiers
+                .Where(ut => ut.UserId == userId && ut.IsActive)
+                .OrderByDescending(ut => ut.AssignedAt)
+                .Select(ut => ut.TierId)
+                .FirstOrDefaultAsync();
+            var tier = await _context.Tiers.FirstOrDefaultAsync(t => t.Id == activeTierId && t.IsActive);
+            if (tier == null)
+            {
+                return ApiResponse<MonthlyUsageSummary>.CreateError("Active tier not found for user");
+            }
+
             var startDate = new DateTime(year, month, 1);
             var endDate = startDate.AddMonths(1).AddDays(-1);
 
@@ -54,27 +61,22 @@ public class BillingService : IBillingService
             var successfulRequests = usages.Count(u => u.ResponseStatusCode >= 200 && u.ResponseStatusCode < 400);
             var failedRequests = totalRequests - successfulRequests;
 
-            // Calculate endpoint usage statistics
             var endpointUsage = usages
                 .GroupBy(u => u.Endpoint)
                 .ToDictionary(g => g.Key, g => g.Count());
 
             var endpointUsageJson = JsonSerializer.Serialize(endpointUsage);
 
-            // Calculate costs
-            var tierPrice = user.Tier.MonthlyPrice;
-            decimal calculatedCost = tierPrice; // Base tier price
+            var tierPrice = tier.MonthlyPrice;
+            decimal calculatedCost = tierPrice;
 
-            // Could add additional costs based on usage if needed
-            // For example: overage fees for exceeding quota
-            if (totalRequests > user.Tier.MonthlyQuota)
+            if (totalRequests > tier.MonthlyQuota)
             {
-                var overageRequests = totalRequests - (long)user.Tier.MonthlyQuota;
-                var overageRate = 0.01m; // $0.01 per overage request
+                var overageRequests = totalRequests - (long)tier.MonthlyQuota;
+                var overageRate = 0.01m;
                 calculatedCost += overageRequests * overageRate;
             }
 
-            // Create monthly summary
             var summary = new MonthlyUsageSummary
             {
                 UserId = userId,
@@ -142,13 +144,15 @@ public class BillingService : IBillingService
     {
         try
         {
-            var user = await _context.Users
-                .Include(u => u.Tier)
-                .FirstOrDefaultAsync(u => u.Id == userId);
-
-            if (user == null)
+            var activeTierId = await _context.UserTiers
+                .Where(ut => ut.UserId == userId && ut.IsActive)
+                .OrderByDescending(ut => ut.AssignedAt)
+                .Select(ut => ut.TierId)
+                .FirstOrDefaultAsync();
+            var tier = await _context.Tiers.FirstOrDefaultAsync(t => t.Id == activeTierId && t.IsActive);
+            if (tier == null)
             {
-                return ApiResponse<decimal>.CreateError("User not found");
+                return ApiResponse<decimal>.CreateError("Active tier not found for user");
             }
 
             var startDate = new DateTime(year, month, 1);
@@ -160,12 +164,11 @@ public class BillingService : IBillingService
                            u.RequestTimestamp <= endDate)
                 .CountAsync();
 
-            decimal calculatedCost = user.Tier.MonthlyPrice;
+            decimal calculatedCost = tier.MonthlyPrice;
 
-            // Add overage fees if applicable
-            if (totalRequests > user.Tier.MonthlyQuota)
+            if (totalRequests > tier.MonthlyQuota)
             {
-                var overageRequests = totalRequests - (long)user.Tier.MonthlyQuota;
+                var overageRequests = totalRequests - (long)tier.MonthlyQuota;
                 var overageRate = 0.01m;
                 calculatedCost += overageRequests * overageRate;
             }
@@ -208,7 +211,6 @@ public class BillingService : IBillingService
             var now = DateTime.UtcNow;
             var lastMonth = now.AddMonths(-1);
 
-            // Get all active users
             var users = await _context.Users
                 .Where(u => u.IsActive)
                 .ToListAsync();
@@ -220,23 +222,13 @@ public class BillingService : IBillingService
             {
                 try
                 {
-                    // Check if billing for last month already exists
-                    var existingSummary = await _context.MonthlyUsageSummaries
+                    var exists = await _context.MonthlyUsageSummaries
                         .AnyAsync(s => s.UserId == user.Id && s.Year == lastMonth.Year && s.Month == lastMonth.Month);
 
-                    if (!existingSummary)
+                    if (!exists)
                     {
                         var result = await ProcessMonthlyBillingAsync(user.Id, lastMonth.Year, lastMonth.Month);
-                        if (result.Success)
-                        {
-                            processedCount++;
-                        }
-                        else
-                        {
-                            errorCount++;
-                            _logger.LogWarning("Failed to process billing for User ID {UserId}: {Errors}", 
-                                user.Id, string.Join(", ", result.Errors ?? new List<string>()));
-                        }
+                        if (result.Success) processedCount++; else errorCount++;
                     }
                 }
                 catch (Exception ex)

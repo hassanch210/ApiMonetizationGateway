@@ -16,10 +16,13 @@ public class AuthController : ControllerBase
     private readonly ApiMonetizationContext _context;
     private readonly IJwtService _jwtService;
 
-    public AuthController(ApiMonetizationContext context, IJwtService jwtService)
+private readonly ApiMonetizationGateway.Shared.Services.IRedisService _redis;
+
+public AuthController(ApiMonetizationContext context, IJwtService jwtService, ApiMonetizationGateway.Shared.Services.IRedisService redis)
     {
         _context = context;
         _jwtService = jwtService;
+    _redis = redis;
     }
 
     [HttpPost("register")]
@@ -28,89 +31,64 @@ public class AuthController : ControllerBase
     [ProducesResponseType(typeof(AuthResponse), StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<AuthResponse>> Register([FromBody] RegisterRequest request)
     {
-        // Validate request
-        if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
+        try
         {
-            return BadRequest(AuthResponse.CreateError("Email and password are required"));
-        }
-
-        // Check if user already exists
-        var existingUser = await _context.Users
-            .FirstOrDefaultAsync(u => u.Email.ToLower() == request.Email.ToLower());
-
-        if (existingUser != null)
-        {
-            return BadRequest(AuthResponse.CreateError("User with this email already exists"));
-        }
-
-        // Validate tier exists
-        var tier = await _context.Tiers.FindAsync(request.TierId);
-        if (tier == null)
-        {
-            return BadRequest(AuthResponse.CreateError("Invalid tier selected"));
-        }
-
-        // Create new user
-        var user = new User
-        {
-            Email = request.Email.ToLower(),
-            FirstName = request.FirstName,
-            LastName = request.LastName,
-            PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
-            ApiKey = Guid.NewGuid().ToString("N"), // Generate API key for backward compatibility
-            TierId = request.TierId,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-            IsActive = true
-        };
-
-        _context.Users.Add(user);
-
-        // Create user tier assignment
-        var userTier = new UserTier
-        {
-            User = user,
-            TierId = request.TierId,
-            AssignedAt = DateTime.UtcNow,
-            UpdatedOn = DateTime.UtcNow,
-            UpdatedBy = "System",
-            IsActive = true,
-            Notes = "Initial tier assignment during registration"
-        };
-
-        _context.UserTiers.Add(userTier);
-
-        await _context.SaveChangesAsync();
-
-        // Load tier information for response
-        await _context.Entry(user).Reference(u => u.Tier).LoadAsync();
-
-        // Generate JWT token
-        var token = _jwtService.GenerateToken(user);
-        var expiresAt = DateTime.UtcNow.AddMinutes(60);
-
-        var userDto = new UserDto
-        {
-            Id = user.Id,
-            Email = user.Email,
-            FirstName = user.FirstName,
-            LastName = user.LastName,
-            ApiKey = user.ApiKey,
-            CreatedAt = user.CreatedAt,
-            IsActive = user.IsActive,
-            Tier = new TierDto
+            if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
             {
-                Id = tier.Id,
-                Name = tier.Name,
-                Description = tier.Description,
-                MonthlyQuota = tier.MonthlyQuota,
-                RateLimit = tier.RateLimit,
-                MonthlyPrice = tier.MonthlyPrice,
-                IsActive = tier.IsActive
+                return BadRequest(AuthResponse.CreateError("Email and password are required"));
             }
-        };
 
-        return Ok(AuthResponse.CreateSuccess(token, expiresAt, userDto));
+            var existingUser = await _context.Users
+                .FirstOrDefaultAsync(u => u.Email.ToLower() == request.Email.ToLower());
+
+            if (existingUser != null)
+            {
+                return BadRequest(AuthResponse.CreateError("User with this email already exists"));
+            }
+
+            var tier = await _context.Tiers.FindAsync(request.TierId);
+            if (tier == null)
+            {
+                return BadRequest(AuthResponse.CreateError("Invalid tier selected"));
+            }
+
+            var user = new User
+            {
+                Email = request.Email.ToLower(),
+                FirstName = request.FirstName,
+                LastName = request.LastName,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                IsActive = true
+            };
+
+            _context.Users.Add(user);
+
+
+            var userTier = new UserTier
+            {
+                User = user,
+                TierId = request.TierId,
+                AssignedAt = DateTime.UtcNow,
+                UpdatedOn = DateTime.UtcNow,
+                UpdatedBy = "System",
+                IsActive = true,
+                Notes = "Initial tier assignment during registration"
+            };
+
+            _context.UserTiers.Add(userTier);
+          
+            await _context.SaveChangesAsync();
+
+            // Do not issue JWT on registration; instruct to login for token
+            return Ok(new AuthResponse { Success = true, Message = "Registration successful. Please login to obtain a token." });
+        }
+        catch (Exception e)
+        {
+            return Ok();
+        }
+        
     }
 
     [HttpPost("login")]
@@ -120,15 +98,12 @@ public class AuthController : ControllerBase
     [ProducesResponseType(typeof(AuthResponse), StatusCodes.Status401Unauthorized)]
     public async Task<ActionResult<AuthResponse>> Login([FromBody] LoginRequest request)
     {
-        // Validate request
         if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
         {
             return BadRequest(AuthResponse.CreateError("Email and password are required"));
         }
 
-        // Find user
         var user = await _context.Users
-            .Include(u => u.Tier)
             .FirstOrDefaultAsync(u => u.Email.ToLower() == request.Email.ToLower() && u.IsActive);
 
         if (user == null || string.IsNullOrEmpty(user.PasswordHash))
@@ -136,15 +111,25 @@ public class AuthController : ControllerBase
             return Unauthorized(AuthResponse.CreateError("Invalid email or password"));
         }
 
-        // Verify password
         if (!BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
         {
             return Unauthorized(AuthResponse.CreateError("Invalid email or password"));
         }
 
-        // Generate JWT token
+        
         var token = _jwtService.GenerateToken(user);
-        var expiresAt = DateTime.UtcNow.AddMinutes(60);
+        var expiresAt = DateTime.UtcNow.AddDays(1);
+
+        // Persist token
+        _context.UserTokens.Add(new UserToken
+        {
+            UserId = user.Id,
+            Token = token,
+            IssuedAt = DateTime.UtcNow,
+            ExpiresAt = expiresAt,
+            IsActive = true
+        });
+        await _context.SaveChangesAsync();
 
         var userDto = new UserDto
         {
@@ -152,20 +137,33 @@ public class AuthController : ControllerBase
             Email = user.Email,
             FirstName = user.FirstName,
             LastName = user.LastName,
-            ApiKey = user.ApiKey!,
+            ApiKey = null,
             CreatedAt = user.CreatedAt,
-            IsActive = user.IsActive,
-            Tier = new TierDto
-            {
-                Id = user.Tier.Id,
-                Name = user.Tier.Name,
-                Description = user.Tier.Description,
-                MonthlyQuota = user.Tier.MonthlyQuota,
-                RateLimit = user.Tier.RateLimit,
-                MonthlyPrice = user.Tier.MonthlyPrice,
-                IsActive = user.Tier.IsActive
-            }
+            IsActive = user.IsActive
         };
+
+        // Cache user profile for rate limiting in Redis (1 day)
+        var activeTierId = await _context.UserTiers
+            .Where(ut => ut.UserId == user.Id && ut.IsActive)
+            .OrderByDescending(ut => ut.AssignedAt)
+            .Select(ut => ut.TierId)
+            .FirstOrDefaultAsync();
+        var tier = await _context.Tiers.FirstOrDefaultAsync(t => t.Id == activeTierId && t.IsActive);
+        if (tier != null)
+        {
+            var cacheKey = $"rate_limit_info_user:{user.Id}";
+            var info = new RateLimitInfo
+            {
+                UserId = user.Id,
+                ApiKey = string.Empty,
+                TierId = activeTierId,
+                RateLimit = tier.RateLimit,
+                MonthlyQuota = tier.MonthlyQuota,
+                CurrentMonthUsage = 0,
+                IsWithinLimits = true
+            };
+            await _redis.SetAsync(cacheKey, info, TimeSpan.FromDays(1));
+        }
 
         return Ok(AuthResponse.CreateSuccess(token, expiresAt, userDto));
     }

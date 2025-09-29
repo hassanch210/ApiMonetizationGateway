@@ -18,14 +18,8 @@ public class User
     [MaxLength(100)]
     public string LastName { get; set; } = string.Empty;
     
-    [Required]
-    public string ApiKey { get; set; } = string.Empty;
-    
     // Password for JWT authentication
     public string? PasswordHash { get; set; }
-    
-    public int TierId { get; set; }
-    public virtual Tier Tier { get; set; } = null!;
     
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

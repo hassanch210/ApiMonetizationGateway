@@ -110,10 +110,8 @@ Write-Host ""
 
 # Start services in order (dependencies first)
 Start-Service "User Service" "src\UserService\ApiMonetizationGateway.UserService" 5001
-Start-Service "Tier Service" "src\TierService\ApiMonetizationGateway.TierService" 5002
 Start-Service "Usage Tracking Service" "src\UsageTrackingService\ApiMonetizationGateway.UsageTrackingService" 5003
 Start-Service "Billing Service" "src\BillingService\ApiMonetizationGateway.BillingService" 5004
-Start-Service "Sample API Service" "src\SampleApiService\ApiMonetizationGateway.SampleApi" 5010
 
 # Wait a bit for all services to be ready
 Write-Host ""
@@ -131,10 +129,10 @@ Write-Host ""
 Write-Host "📋 Service URLs:" -ForegroundColor White
 Write-Host "  🌐 API Gateway:         http://localhost:5000" -ForegroundColor Cyan
 Write-Host "  👥 User Service:        http://localhost:5001/swagger" -ForegroundColor Cyan
-Write-Host "  🎯 Tier Service:        http://localhost:5002/swagger" -ForegroundColor Cyan
+ 
 Write-Host "  📊 Usage Tracking:      http://localhost:5003/swagger" -ForegroundColor Cyan
 Write-Host "  💰 Billing Service:     http://localhost:5004/swagger" -ForegroundColor Cyan
-Write-Host "  🧪 Sample API:          http://localhost:5010/swagger" -ForegroundColor Cyan
+ 
 
 Write-Host ""
 Write-Host "📋 Infrastructure URLs:" -ForegroundColor White
@@ -145,9 +143,7 @@ Write-Host "  🚀 Redis:               localhost:6379" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "🧪 Quick Test:" -ForegroundColor White
 Write-Host "  1. Create a user: POST http://localhost:5001/api/users" -ForegroundColor Yellow
-Write-Host "  2. Get API key from response" -ForegroundColor Yellow
-Write-Host "  3. Test gateway: GET http://localhost:5000/api/sample/weatherforecast" -ForegroundColor Yellow
-Write-Host "     Headers: X-API-Key: [your-api-key]" -ForegroundColor Yellow
+Write-Host "  2. Test gateway routes to User Service via /admin/users/*" -ForegroundColor Yellow
 
 Write-Host ""
 Write-Host "⚠️  To stop all services, close the command windows or press Ctrl+C in each" -ForegroundColor Yellow

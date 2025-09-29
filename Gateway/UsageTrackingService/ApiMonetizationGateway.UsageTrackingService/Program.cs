@@ -1,6 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using RabbitMQ.Client;
 using ApiMonetizationGateway.Shared.Data;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 using ApiMonetizationGateway.Shared.Services;
 using ApiMonetizationGateway.UsageTrackingService.Services;
 
@@ -23,33 +26,7 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
-    // Add JWT Bearer authorization
-    c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
-    {
-        Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
-        Name = "Authorization",
-        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
-    });
-
-    c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement()
-    {
-        {
-            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
-            {
-                Reference = new Microsoft.OpenApi.Models.OpenApiReference
-                {
-                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                },
-                Scheme = "oauth2",
-                Name = "Bearer",
-                In = Microsoft.OpenApi.Models.ParameterLocation.Header,
-            },
-            new List<string>()
-        }
-    });
+    // Simplified Swagger; removed auth decorations
 });
 
 // Database configuration
@@ -88,21 +65,40 @@ builder.Services.AddCors(options =>
     });
 });
 
+// JWT Authentication configuration
+var jwtKey = builder.Configuration["Jwt:Key"];
+var jwtIssuer = builder.Configuration["Jwt:Issuer"];
+var jwtAudience = builder.Configuration["Jwt:Audience"];
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = jwtIssuer,
+            ValidAudience = jwtAudience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey!))
+        };
+    });
+
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Usage Tracking Service API v1");
-        c.RoutePrefix = "swagger";
-        c.DocumentTitle = "API Monetization Gateway - Usage Tracking Service";
-        c.DefaultModelsExpandDepth(-1);
-        c.DefaultModelExpandDepth(2);
-        c.DisplayRequestDuration();
-    });
+    app.UseSwaggerUI(c => { c.SwaggerEndpoint("/swagger/v1/swagger.json", "Usage Tracking Service API v1"); c.RoutePrefix = string.Empty; });
 }
 
 // Run database migrations automatically
@@ -115,6 +111,9 @@ using (var scope = app.Services.CreateScope())
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
 app.UseRouting();
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 

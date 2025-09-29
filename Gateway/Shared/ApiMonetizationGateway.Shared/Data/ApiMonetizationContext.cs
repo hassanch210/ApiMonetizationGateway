@@ -14,6 +14,7 @@ public class ApiMonetizationContext : DbContext
     public DbSet<ApiUsage> ApiUsages { get; set; }
     public DbSet<MonthlyUsageSummary> MonthlyUsageSummaries { get; set; }
     public DbSet<UserTier> UserTiers { get; set; }
+    public DbSet<UserToken> UserTokens { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -24,12 +25,7 @@ public class ApiMonetizationContext : DbContext
         {
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.Email).IsUnique();
-            entity.HasIndex(e => e.ApiKey).IsUnique();
-            
-            entity.HasOne(e => e.Tier)
-                .WithMany(t => t.Users)
-                .HasForeignKey(e => e.TierId)
-                .OnDelete(DeleteBehavior.Restrict);
+            // Tier relation removed from User; using UserTiers table instead
         });
 
         // Tier configuration
@@ -87,6 +83,17 @@ public class ApiMonetizationContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.TierId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // UserToken configuration
+        modelBuilder.Entity<UserToken>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.UserId, e.IsActive });
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         // Seed default tiers

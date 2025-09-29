@@ -4,6 +4,7 @@ using ApiMonetizationGateway.Shared.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace ApiMonetizationGateway.UserService.Migrations
 {
     [DbContext(typeof(ApiMonetizationContext))]
-    partial class ApiMonetizationContextModelSnapshot : ModelSnapshot
+    [Migration("20250929180801_RemoveUserApiKeyAndTierId_Official")]
+    partial class RemoveUserApiKeyAndTierId_Official
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -167,26 +170,26 @@ namespace ApiMonetizationGateway.UserService.Migrations
                         new
                         {
                             Id = 1,
-                            CreatedAt = new DateTime(2025, 9, 29, 20, 21, 55, 152, DateTimeKind.Utc).AddTicks(1909),
+                            CreatedAt = new DateTime(2025, 9, 29, 18, 7, 59, 515, DateTimeKind.Utc).AddTicks(249),
                             Description = "Free tier with basic limits",
                             IsActive = true,
                             MonthlyPrice = 0m,
                             MonthlyQuota = 100L,
                             Name = "Free",
                             RateLimit = 2,
-                            UpdatedAt = new DateTime(2025, 9, 29, 20, 21, 55, 152, DateTimeKind.Utc).AddTicks(1910)
+                            UpdatedAt = new DateTime(2025, 9, 29, 18, 7, 59, 515, DateTimeKind.Utc).AddTicks(250)
                         },
                         new
                         {
                             Id = 2,
-                            CreatedAt = new DateTime(2025, 9, 29, 20, 21, 55, 152, DateTimeKind.Utc).AddTicks(1915),
+                            CreatedAt = new DateTime(2025, 9, 29, 18, 7, 59, 515, DateTimeKind.Utc).AddTicks(257),
                             Description = "Professional tier with higher limits",
                             IsActive = true,
                             MonthlyPrice = 50m,
                             MonthlyQuota = 100000L,
                             Name = "Pro",
                             RateLimit = 10,
-                            UpdatedAt = new DateTime(2025, 9, 29, 20, 21, 55, 152, DateTimeKind.Utc).AddTicks(1915)
+                            UpdatedAt = new DateTime(2025, 9, 29, 18, 7, 59, 515, DateTimeKind.Utc).AddTicks(257)
                         });
                 });
 
@@ -222,6 +225,9 @@ namespace ApiMonetizationGateway.UserService.Migrations
                     b.Property<string>("PasswordHash")
                         .HasColumnType("nvarchar(max)");
 
+                    b.Property<int?>("TierId")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("datetime2");
 
@@ -229,6 +235,8 @@ namespace ApiMonetizationGateway.UserService.Migrations
 
                     b.HasIndex("Email")
                         .IsUnique();
+
+                    b.HasIndex("TierId");
 
                     b.ToTable("Users");
                 });
@@ -273,40 +281,6 @@ namespace ApiMonetizationGateway.UserService.Migrations
                     b.ToTable("UserTiers");
                 });
 
-            modelBuilder.Entity("ApiMonetizationGateway.Shared.Models.UserToken", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("ExpiresAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("bit");
-
-                    b.Property<DateTime>("IssuedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<DateTime?>("RevokedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Token")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<int>("UserId")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId", "IsActive");
-
-                    b.ToTable("UserTokens");
-                });
-
             modelBuilder.Entity("ApiMonetizationGateway.Shared.Models.ApiUsage", b =>
                 {
                     b.HasOne("ApiMonetizationGateway.Shared.Models.User", "User")
@@ -329,6 +303,13 @@ namespace ApiMonetizationGateway.UserService.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("ApiMonetizationGateway.Shared.Models.User", b =>
+                {
+                    b.HasOne("ApiMonetizationGateway.Shared.Models.Tier", null)
+                        .WithMany("Users")
+                        .HasForeignKey("TierId");
+                });
+
             modelBuilder.Entity("ApiMonetizationGateway.Shared.Models.UserTier", b =>
                 {
                     b.HasOne("ApiMonetizationGateway.Shared.Models.Tier", "Tier")
@@ -348,15 +329,9 @@ namespace ApiMonetizationGateway.UserService.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("ApiMonetizationGateway.Shared.Models.UserToken", b =>
+            modelBuilder.Entity("ApiMonetizationGateway.Shared.Models.Tier", b =>
                 {
-                    b.HasOne("ApiMonetizationGateway.Shared.Models.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("User");
+                    b.Navigation("Users");
                 });
 
             modelBuilder.Entity("ApiMonetizationGateway.Shared.Models.User", b =>

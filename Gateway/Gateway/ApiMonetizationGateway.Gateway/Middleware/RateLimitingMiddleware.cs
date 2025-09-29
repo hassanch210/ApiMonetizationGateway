@@ -22,29 +22,27 @@ public class RateLimitingMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        // Extract API key from headers
-        if (!context.Request.Headers.TryGetValue("X-API-Key", out var apiKeyValues))
+        var path = context.Request.Path.Value ?? string.Empty;
+        if (path.StartsWith("/api/auth", StringComparison.OrdinalIgnoreCase) || path.StartsWith("/swagger", StringComparison.OrdinalIgnoreCase))
         {
-            await WriteUnauthorizedResponse(context, "API key is required");
+            await _next(context);
             return;
         }
 
-        var apiKey = apiKeyValues.FirstOrDefault();
-        if (string.IsNullOrEmpty(apiKey))
+        var userIdClaim = context.User?.Claims?.FirstOrDefault(c => c.Type == "sub" || c.Type == "userId" || c.Type == "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier");
+        if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out var userId))
         {
-            await WriteUnauthorizedResponse(context, "Invalid API key");
+            await _next(context);
             return;
         }
 
-        // Get rate limit info from cache or database
-        var rateLimitInfo = await GetRateLimitInfo(apiKey);
+        var rateLimitInfo = await GetRateLimitInfo(userId);
         if (rateLimitInfo == null)
         {
-            await WriteUnauthorizedResponse(context, "Invalid API key");
-            return;
+            await _next(context);
+            return;            
         }
 
-        // Check rate limits
         var rateLimitResult = await CheckRateLimits(rateLimitInfo);
         if (!rateLimitResult.IsWithinLimits)
         {
@@ -52,77 +50,71 @@ public class RateLimitingMiddleware
             return;
         }
 
-        // Add user info to context for downstream services
         context.Items["UserId"] = rateLimitInfo.UserId;
         context.Items["TierId"] = rateLimitInfo.TierId;
 
-        // Track request start time
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        
-        // Continue to next middleware
         await _next(context);
-
-        // Track usage after request completes
         stopwatch.Stop();
         _ = Task.Run(() => TrackUsage(context, rateLimitInfo.UserId, stopwatch.ElapsedMilliseconds));
     }
 
-    private async Task<RateLimitInfo?> GetRateLimitInfo(string apiKey)
+    private async Task<RateLimitInfo?> GetRateLimitInfo(int userId)
     {
-        // Try to get from Redis cache first
-        var cacheKey = $"rate_limit_info:{apiKey}";
+        var cacheKey = $"rate_limit_info_user:{userId}";
         var cachedInfo = await _redisService.GetAsync<RateLimitInfo>(cacheKey);
-        
         if (cachedInfo != null)
         {
             return cachedInfo;
         }
 
-        // Get from database and cache it
         using var scope = _serviceScopeFactory.CreateScope();
-        var context = scope.ServiceProvider.GetRequiredService<ApiMonetizationContext>();
-        
-        var user = await context.Users
-            .Include(u => u.Tier)
-            .FirstOrDefaultAsync(u => u.ApiKey == apiKey && u.IsActive);
+        var db = scope.ServiceProvider.GetRequiredService<ApiMonetizationContext>();
 
+        var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId && u.IsActive);
         if (user == null) return null;
 
+        var activeTier = await db.UserTiers
+            .Where(ut => ut.UserId == userId && ut.IsActive)
+            .OrderByDescending(ut => ut.AssignedAt)
+            .Select(ut => ut.TierId)
+            .FirstOrDefaultAsync();
+        var tier = await db.Tiers.FirstOrDefaultAsync(t => t.Id == activeTier && t.IsActive);
+
         var currentMonth = DateTime.UtcNow;
-        var monthlyUsage = await context.ApiUsages
+        var monthlyUsage = await db.ApiUsages
             .Where(a => a.UserId == user.Id && 
                        a.RequestTimestamp.Year == currentMonth.Year &&
                        a.RequestTimestamp.Month == currentMonth.Month)
             .CountAsync();
 
-        var rateLimitInfo = new RateLimitInfo
+        var info = new RateLimitInfo
         {
             UserId = user.Id,
-            ApiKey = apiKey,
-            TierId = user.TierId,
-            RateLimit = user.Tier.RateLimit,
-            MonthlyQuota = user.Tier.MonthlyQuota,
+            ApiKey = string.Empty,
+            TierId = activeTier,
+            RateLimit = tier?.RateLimit ?? 0,
+            MonthlyQuota = tier?.MonthlyQuota ?? 0,
             CurrentMonthUsage = monthlyUsage,
             IsWithinLimits = true
         };
 
-        // Cache for 1 minute
-        await _redisService.SetAsync(cacheKey, rateLimitInfo, TimeSpan.FromMinutes(1));
-
-        return rateLimitInfo;
+        await _redisService.SetAsync(cacheKey, info, TimeSpan.FromDays(1));
+        return info;
     }
 
     private async Task<RateLimitInfo> CheckRateLimits(RateLimitInfo info)
     {
-        // Check monthly quota
-        if (info.CurrentMonthUsage >= info.MonthlyQuota)
+        // Monthly quota via Redis counter per month
+        var monthKey = $"monthly_usage:{info.UserId}:{DateTime.UtcNow:yyyyMM}";
+        var monthCount = await _redisService.IncrementAsync(monthKey, 1, TimeSpan.FromDays(35));
+        if (monthCount > info.MonthlyQuota)
         {
             info.IsWithinLimits = false;
             info.LimitExceededReason = "Monthly quota exceeded";
             return info;
         }
 
-        // Check per-second rate limit using sliding window
         var rateLimitKey = $"rate_limit:{info.UserId}:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
         var currentRequests = await _redisService.IncrementAsync(rateLimitKey, 1, TimeSpan.FromSeconds(1));
 
@@ -162,31 +154,19 @@ public class RateLimitingMiddleware
         }
         catch (Exception ex)
         {
-            // Log error but don't fail the request
             Console.WriteLine($"Error tracking usage: {ex.Message}");
         }
     }
 
-    private static async Task WriteUnauthorizedResponse(HttpContext context, string message)
-    {
-        context.Response.StatusCode = (int)HttpStatusCode.Unauthorized;
-        context.Response.ContentType = "application/json";
-
-        var response = new { Error = message };
-        var json = JsonSerializer.Serialize(response);
-        await context.Response.WriteAsync(json);
-    }
-
     private static async Task WriteRateLimitResponse(HttpContext context, RateLimitInfo rateLimitInfo)
     {
-        context.Response.StatusCode = 429; // Too Many Requests
+        context.Response.StatusCode = 429;
         context.Response.ContentType = "application/json";
 
-        // Add rate limit headers
-        context.Response.Headers.Add("X-RateLimit-Limit", rateLimitInfo.RateLimit.ToString());
-        context.Response.Headers.Add("X-RateLimit-Remaining", "0");
-        context.Response.Headers.Add("X-RateLimit-Reset", DateTimeOffset.UtcNow.AddSeconds(60).ToUnixTimeSeconds().ToString());
-        context.Response.Headers.Add("Retry-After", "60");
+        context.Response.Headers["X-RateLimit-Limit"] = rateLimitInfo.RateLimit.ToString();
+        context.Response.Headers["X-RateLimit-Remaining"] = "0";
+        context.Response.Headers["X-RateLimit-Reset"] = DateTimeOffset.UtcNow.AddSeconds(60).ToUnixTimeSeconds().ToString();
+        context.Response.Headers["Retry-After"] = "60";
 
         var response = new RateLimitViolationResponse
         {

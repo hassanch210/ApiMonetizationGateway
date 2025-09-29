@@ -18,42 +18,10 @@
       "DownstreamHostAndPorts": [
         {
           "Host": "localhost",
-          "Port": 5010
-        }
-      ],
-      "UpstreamPathTemplate": "/api/sample/{everything}",
-      "UpstreamHttpMethod": [ "GET", "POST", "PUT", "DELETE" ],
-      "AuthenticationOptions": {
-        "AuthenticationProviderKey": "Bearer",
-        "AllowedScopes": []
-      }
-    },
-    {
-      "DownstreamPathTemplate": "/api/{everything}",
-      "DownstreamScheme": "http",
-      "DownstreamHostAndPorts": [
-        {
-          "Host": "localhost",
           "Port": 5001
         }
       ],
       "UpstreamPathTemplate": "/admin/users/{everything}",
-      "UpstreamHttpMethod": [ "GET", "POST", "PUT", "DELETE" ],
-      "AuthenticationOptions": {
-        "AuthenticationProviderKey": "Bearer",
-        "AllowedScopes": []
-      }
-    },
-    {
-      "DownstreamPathTemplate": "/api/{everything}",
-      "DownstreamScheme": "http",
-      "DownstreamHostAndPorts": [
-        {
-          "Host": "localhost",
-          "Port": 5002
-        }
-      ],
-      "UpstreamPathTemplate": "/admin/tiers/{everything}",
       "UpstreamHttpMethod": [ "GET", "POST", "PUT", "DELETE" ],
       "AuthenticationOptions": {
         "AuthenticationProviderKey": "Bearer",

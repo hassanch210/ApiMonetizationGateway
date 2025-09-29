@@ -20,7 +20,7 @@ public class JwtService : IJwtService
         _key = configuration["Jwt:Key"] ?? throw new InvalidOperationException("JWT Key not configured");
         _issuer = configuration["Jwt:Issuer"] ?? throw new InvalidOperationException("JWT Issuer not configured");
         _audience = configuration["Jwt:Audience"] ?? throw new InvalidOperationException("JWT Audience not configured");
-        _expiryMinutes = configuration.GetValue<int>("Jwt:ExpiryMinutes", 60);
+        _expiryMinutes = configuration.GetValue<int>("Jwt:ExpiryMinutes", 1440);
     }
 
     public string GenerateToken(User user)
@@ -33,7 +33,6 @@ public class JwtService : IJwtService
             new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
             new Claim(ClaimTypes.Email, user.Email),
             new Claim(ClaimTypes.Name, $"{user.FirstName} {user.LastName}"),
-            new Claim("TierId", user.TierId.ToString()),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
             new Claim(JwtRegisteredClaimNames.Iat, DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64)
         };

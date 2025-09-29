@@ -37,16 +37,7 @@ public class UsersController : ControllerBase
         return Ok(result);
     }
 
-    [HttpGet("by-api-key/{apiKey}")]
-    public async Task<ActionResult<ApiResponse<UserDto?>>> GetUserByApiKey(string apiKey)
-    {
-        var result = await _userService.GetUserByApiKeyAsync(apiKey);
-        
-        if (result.Success && result.Data == null)
-            return NotFound();
-        
-        return Ok(result);
-    }
+    // Removed API key lookup endpoint
 
     [HttpGet("by-email/{email}")]
     public async Task<ActionResult<ApiResponse<UserDto?>>> GetUserByEmail(string email)
@@ -96,25 +87,7 @@ public class UsersController : ControllerBase
         return Ok(result);
     }
 
-    [HttpPost("{id}/regenerate-api-key")]
-    public async Task<ActionResult<ApiResponse<string>>> RegenerateApiKey(int id)
-    {
-        var result = await _userService.RegenerateApiKeyAsync(id);
-        
-        if (!result.Success)
-        {
-            if (result.Errors?.Any(e => e.Contains("not found")) == true)
-                return NotFound(result);
-            return BadRequest(result);
-        }
-        
-        return Ok(result);
-    }
+    // Removed API key regeneration endpoint
 
-    [HttpGet("validate-api-key/{apiKey}")]
-    public async Task<ActionResult<ApiResponse<bool>>> ValidateApiKey(string apiKey)
-    {
-        var result = await _userService.ValidateApiKeyAsync(apiKey);
-        return Ok(result);
-    }
+    // Removed API key validation endpoint
 }
