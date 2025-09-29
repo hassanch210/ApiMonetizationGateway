@@ -1,0 +1,6 @@
+@ApiMonetizationGateway.UsageTrackingService_HostAddress = http://localhost:5287
+
+GET {{ApiMonetizationGateway.UsageTrackingService_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

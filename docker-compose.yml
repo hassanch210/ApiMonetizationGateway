@@ -1,0 +1,148 @@
+version: '3.8'
+
+services:
+  # Infrastructure Services
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: apimonetization-sqlserver
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=YourStrong@Password123
+      - MSSQL_PID=Express
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    networks:
+      - apimonetization-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: apimonetization-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - apimonetization-network
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: apimonetization-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - apimonetization-network
+
+  # Microservices
+  gateway:
+    build:
+      context: .
+      dockerfile: src/Gateway/ApiMonetizationGateway.Gateway/Dockerfile
+    container_name: apimonetization-gateway
+    ports:
+      - "5000:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Docker
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=ApiMonetizationGateway;User Id=sa;Password=YourStrong@Password123;TrustServerCertificate=true
+      - ConnectionStrings__Redis=redis:6379
+      - RabbitMQ__HostName=rabbitmq
+    depends_on:
+      - sqlserver
+      - redis
+      - rabbitmq
+      - userservice
+      - tierservice
+      - sampleapi
+    networks:
+      - apimonetization-network
+
+  userservice:
+    build:
+      context: .
+      dockerfile: src/UserService/ApiMonetizationGateway.UserService/Dockerfile
+    container_name: apimonetization-userservice
+    ports:
+      - "5001:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Docker
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=ApiMonetizationGateway;User Id=sa;Password=YourStrong@Password123;TrustServerCertificate=true
+    depends_on:
+      - sqlserver
+    networks:
+      - apimonetization-network
+
+  tierservice:
+    build:
+      context: .
+      dockerfile: src/TierService/ApiMonetizationGateway.TierService/Dockerfile
+    container_name: apimonetization-tierservice
+    ports:
+      - "5002:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Docker
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=ApiMonetizationGateway;User Id=sa;Password=YourStrong@Password123;TrustServerCertificate=true
+    depends_on:
+      - sqlserver
+    networks:
+      - apimonetization-network
+
+  usagetrackingservice:
+    build:
+      context: .
+      dockerfile: src/UsageTrackingService/ApiMonetizationGateway.UsageTrackingService/Dockerfile
+    container_name: apimonetization-usagetracking
+    ports:
+      - "5003:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Docker
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=ApiMonetizationGateway;User Id=sa;Password=YourStrong@Password123;TrustServerCertificate=true
+      - RabbitMQ__HostName=rabbitmq
+    depends_on:
+      - sqlserver
+      - rabbitmq
+    networks:
+      - apimonetization-network
+
+  billingservice:
+    build:
+      context: .
+      dockerfile: src/BillingService/ApiMonetizationGateway.BillingService/Dockerfile
+    container_name: apimonetization-billing
+    ports:
+      - "5004:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Docker
+      - ConnectionStrings__DefaultConnection=Server=sqlserver,1433;Database=ApiMonetizationGateway;User Id=sa;Password=YourStrong@Password123;TrustServerCertificate=true
+    depends_on:
+      - sqlserver
+    networks:
+      - apimonetization-network
+
+  sampleapi:
+    build:
+      context: .
+      dockerfile: src/SampleApiService/ApiMonetizationGateway.SampleApi/Dockerfile
+    container_name: apimonetization-sampleapi
+    ports:
+      - "5010:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Docker
+    networks:
+      - apimonetization-network
+
+volumes:
+  sqlserver_data:
+  redis_data:
+  rabbitmq_data:
+
+networks:
+  apimonetization-network:
+    driver: bridge

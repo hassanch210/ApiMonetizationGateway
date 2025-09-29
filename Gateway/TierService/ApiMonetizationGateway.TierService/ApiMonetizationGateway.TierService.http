@@ -1,0 +1,6 @@
+@ApiMonetizationGateway.TierService_HostAddress = http://localhost:5055
+
+GET {{ApiMonetizationGateway.TierService_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

@@ -1,0 +1,6 @@
+@ApiMonetizationGateway.BillingService_HostAddress = http://localhost:5118
+
+GET {{ApiMonetizationGateway.BillingService_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
