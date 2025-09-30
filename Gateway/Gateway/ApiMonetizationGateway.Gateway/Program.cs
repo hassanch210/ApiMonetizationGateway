@@ -5,8 +5,8 @@ using StackExchange.Redis;
 using RabbitMQ.Client;
 using ApiMonetizationGateway.Shared.Data;
 using ApiMonetizationGateway.Shared.Services;
-using ApiMonetizationGateway.Shared.Extensions;
 using ApiMonetizationGateway.Gateway.Middleware;
+using ApiMonetizationGateway.Gateway.Models;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
@@ -116,7 +116,47 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = jwtIssuer,
             ValidAudience = jwtAudience,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+            ClockSkew = TimeSpan.Zero // Reduce the default 5 min clock skew to improve token expiration accuracy
+        };
+        
+        // Event handlers for token validation
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var userId = context.Principal?.FindFirst("sub")?.Value;
+                if (!string.IsNullOrEmpty(userId))
+                {
+                    // Check if token is in Redis (valid)
+                    var redis = context.HttpContext.RequestServices.GetRequiredService<IRedisService>();
+                    var tokenKey = $"valid_token:{userId}";
+                    var storedToken = await redis.GetAsync<string>(tokenKey);
+                    
+                    // If token not found in Redis, it might have been revoked
+                    if (string.IsNullOrEmpty(storedToken))
+                    {
+                        context.Fail("Token has been revoked or is invalid");
+                        return;
+                    }
+                    
+                    // Store user tier info in context for rate limiting
+                    var userTierKey = $"user_tier:{userId}";
+                    var userTier = await redis.GetAsync<UserTierInfo>(userTierKey);
+                    if (userTier != null)
+                    {
+                        context.HttpContext.Items["UserTier"] = userTier;
+                    }
+                }
+            },
+            OnAuthenticationFailed = context =>
+            {
+                if (context.Exception.GetType() == typeof(SecurityTokenExpiredException))
+                {
+                    context.Response.Headers.Add("Token-Expired", "true");
+                }
+                return Task.CompletedTask;
+            }
         };
     });
 
@@ -138,9 +178,6 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
-
-// Use our custom JWT authentication middleware
-app.UseJwtAuthentication();
 
 // Add JWT authentication middleware
 app.UseAuthentication();

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using ApiMonetizationGateway.Shared.Data;
 using ApiMonetizationGateway.Shared.DTOs;
 using ApiMonetizationGateway.Shared.Services;
+using ApiMonetizationGateway.Gateway.Models;
 using System.Text.Json;
 using System.Net;
 
@@ -12,12 +13,18 @@ public class RateLimitingMiddleware
     private readonly RequestDelegate _next;
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly IRedisService _redisService;
+    private readonly IMessageQueueService _messageQueueService;
 
-    public RateLimitingMiddleware(RequestDelegate next, IServiceScopeFactory serviceScopeFactory, IRedisService redisService)
+    public RateLimitingMiddleware(
+        RequestDelegate next, 
+        IServiceScopeFactory serviceScopeFactory, 
+        IRedisService redisService,
+        IMessageQueueService messageQueueService)
     {
         _next = next;
         _serviceScopeFactory = serviceScopeFactory;
         _redisService = redisService;
+        _messageQueueService = messageQueueService;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -36,12 +43,43 @@ public class RateLimitingMiddleware
             return;
         }
 
-        var rateLimitInfo = await GetRateLimitInfo(userId);
-        if (rateLimitInfo == null)
+        // Get user tier info from Redis (populated during JWT validation)
+        var userTier = context.Items["UserTier"] as UserTierInfo;
+        
+        // If not available in context, try to get from Redis directly
+        if (userTier == null)
+        {
+            var userTierKey = $"user_tier:{userId}";
+            userTier = await _redisService.GetAsync<UserTierInfo>(userTierKey);
+            
+            // If still not available, fall back to database and cache in Redis
+            if (userTier == null)
+            {
+                userTier = await GetUserTierFromDatabase(userId);
+                if (userTier != null)
+                {
+                    await _redisService.SetAsync(userTierKey, userTier, TimeSpan.FromHours(24));
+                }
+            }
+        }
+        
+        if (userTier == null)
         {
             await _next(context);
-            return;            
+            return;
         }
+        
+        // Create rate limit info from user tier
+        var rateLimitInfo = new RateLimitInfo
+        {
+            UserId = userId,
+            ApiKey = string.Empty,
+            TierId = userTier.TierId,
+            RateLimit = userTier.RateLimit,
+            MonthlyQuota = userTier.MonthlyQuota,
+            CurrentMonthUsage = await GetMonthlyUsageFromRedis(userId),
+            IsWithinLimits = true
+        };
 
         var rateLimitResult = await CheckRateLimits(rateLimitInfo);
         if (!rateLimitResult.IsWithinLimits)
@@ -56,85 +94,74 @@ public class RateLimitingMiddleware
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         await _next(context);
         stopwatch.Stop();
+        
+        // Track usage asynchronously via RabbitMQ
         _ = Task.Run(() => TrackUsage(context, rateLimitInfo.UserId, stopwatch.ElapsedMilliseconds));
     }
-
-    private async Task<RateLimitInfo?> GetRateLimitInfo(int userId)
+    
+    private async Task<UserTierInfo?> GetUserTierFromDatabase(int userId)
     {
-        var cacheKey = $"rate_limit_info_user:{userId}";
-        var cachedInfo = await _redisService.GetAsync<RateLimitInfo>(cacheKey);
-        if (cachedInfo != null)
-        {
-            return cachedInfo;
-        }
-
         using var scope = _serviceScopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApiMonetizationContext>();
 
         var user = await db.Users.FirstOrDefaultAsync(u => u.Id == userId && u.IsActive);
         if (user == null) return null;
 
-        var activeTier = await db.UserTiers
+        var userTier = await db.UserTiers
             .Where(ut => ut.UserId == userId && ut.IsActive)
             .OrderByDescending(ut => ut.AssignedAt)
-            .Select(ut => ut.TierId)
             .FirstOrDefaultAsync();
-        var tier = await db.Tiers.FirstOrDefaultAsync(t => t.Id == activeTier && t.IsActive);
-
-        var currentMonth = DateTime.UtcNow;
-        var monthlyUsage = await db.ApiUsages
-            .Where(a => a.UserId == user.Id && 
-                       a.RequestTimestamp.Year == currentMonth.Year &&
-                       a.RequestTimestamp.Month == currentMonth.Month)
-            .CountAsync();
-
-        var info = new RateLimitInfo
+            
+        if (userTier == null) return null;
+        
+        var tier = await db.Tiers.FirstOrDefaultAsync(t => t.Id == userTier.TierId && t.IsActive);
+        if (tier == null) return null;
+        
+        return new UserTierInfo
         {
-            UserId = user.Id,
-            ApiKey = string.Empty,
-            TierId = activeTier,
-            RateLimit = tier?.RateLimit ?? 0,
-            MonthlyQuota = tier?.MonthlyQuota ?? 0,
-            CurrentMonthUsage = monthlyUsage,
-            IsWithinLimits = true
+            UserId = userId,
+            TierId = (int)tier.Id,
+            TierName = tier.Name,
+            RateLimit = (int)tier.RateLimit,
+            MonthlyQuota = (int)tier.MonthlyQuota,
+            ExpiresAt = DateTime.UtcNow.AddYears(1) // Default expiration
         };
-
-        await _redisService.SetAsync(cacheKey, info, TimeSpan.FromDays(1));
-        return info;
+    }
+    
+    private async Task<int> GetMonthlyUsageFromRedis(int userId)
+    {
+        var monthKey = $"monthly_usage:{userId}:{DateTime.UtcNow:yyyyMM}";
+        var monthCount = await _redisService.GetAsync<string>(monthKey);
+        return string.IsNullOrEmpty(monthCount) ? 0 : int.Parse(monthCount);
     }
 
     private async Task<RateLimitInfo> CheckRateLimits(RateLimitInfo info)
     {
-        // Check monthly quota first
-        var monthKey = $"monthly_usage_user:{info.UserId}:{DateTime.UtcNow:yyyyMM}";
+        // Monthly quota via Redis counter per month
+        var monthKey = $"monthly_usage:{info.UserId}:{DateTime.UtcNow:yyyyMM}";
         var monthCount = await _redisService.IncrementAsync(monthKey, 1, TimeSpan.FromDays(35));
         
-        // If monthly quota is exceeded, return immediately
-        if (info.MonthlyQuota > 0 && monthCount > info.MonthlyQuota)
+        // Update the current month usage in the info object
+        info.CurrentMonthUsage = monthCount;
+        
+        if (monthCount > info.MonthlyQuota)
         {
             info.IsWithinLimits = false;
-            info.LimitExceededReason = $"Monthly quota exceeded. Limit: {info.MonthlyQuota}, Current: {monthCount}";
+            info.LimitExceededReason = "Monthly quota exceeded";
             return info;
         }
 
-        // Check per-second rate limit using sliding window
-        var currentSecond = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var rateLimitKey = $"rate_limit_counter_user:{info.UserId}:{currentSecond}";
-        
-        // Increment the counter for the current second and set expiry to 5 seconds
-        var currentRequests = await _redisService.IncrementAsync(rateLimitKey, 1, TimeSpan.FromSeconds(5));
+        // Per-second rate limiting using Redis
+        var rateLimitKey = $"rate_limit:{info.UserId}:{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+        var currentRequests = await _redisService.IncrementAsync(rateLimitKey, 1, TimeSpan.FromSeconds(1));
 
-        // If rate limit is exceeded, return error
-        if (info.RateLimit > 0 && currentRequests > info.RateLimit)
+        if (currentRequests > info.RateLimit)
         {
             info.IsWithinLimits = false;
-            info.LimitExceededReason = $"Rate limit exceeded. Limit: {info.RateLimit} requests/second, Current: {currentRequests}";
+            info.LimitExceededReason = "Rate limit exceeded";
             return info;
         }
 
-        // Update the current month usage in the rate limit info
-        info.CurrentMonthUsage = (int)monthCount;
-        
         return info;
     }
 
@@ -142,36 +169,39 @@ public class RateLimitingMiddleware
     {
         try
         {
-            using var scope = _serviceScopeFactory.CreateScope();
-            var messageQueue = scope.ServiceProvider.GetService<IMessageQueueService>();
-            
-            if (messageQueue != null)
+            // Create usage tracking message
+            var usageMessage = new UsageTrackingMessage
             {
-                // Get tier ID from context items
-                var tierId = context.Items.TryGetValue("TierId", out var tierIdObj) && tierIdObj != null 
-                    ? Convert.ToInt32(tierIdObj) 
-                    : 0;
-                
-                // Create detailed usage tracking message
-                var usageMessage = new UsageTrackingMessage
-                {
-                    UserId = userId,
-                    Endpoint = context.Request.Path.Value ?? "",
-                    HttpMethod = context.Request.Method,
-                    ResponseStatusCode = context.Response.StatusCode,
-                    ResponseTimeMs = responseTimeMs,
-                    IpAddress = context.Connection.RemoteIpAddress?.ToString(),
-                    UserAgent = context.Request.Headers.UserAgent.ToString(),
-                    RequestTimestamp = DateTime.UtcNow
-                };
+                UserId = userId,
+                Endpoint = context.Request.Path.Value ?? "",
+                HttpMethod = context.Request.Method,
+                ResponseStatusCode = context.Response.StatusCode,
+                ResponseTimeMs = responseTimeMs,
+                IpAddress = context.Connection.RemoteIpAddress?.ToString(),
+                UserAgent = context.Request.Headers.UserAgent.ToString(),
+                RequestTimestamp = DateTime.UtcNow
+            };
 
-                // Publish to RabbitMQ queue for processing by the UsageTrackingService
-                await messageQueue.PublishAsync("api-usage-tracking", usageMessage);
-                
-                // Also update the monthly usage counter in Redis
-                var monthKey = $"monthly_usage_user:{userId}:{DateTime.UtcNow:yyyyMM}";
-                await _redisService.IncrementAsync(monthKey, 1, TimeSpan.FromDays(35));
-            }
+            // Update Redis for real-time tracking
+            var apiKey = $"api_hit:{userId}:{DateTime.UtcNow:yyyyMMdd}:{context.Request.Path.Value}";
+            await _redisService.IncrementAsync(apiKey, 1, TimeSpan.FromDays(2));
+            
+            // Send message to RabbitMQ for persistent storage in MS SQL
+            await _messageQueueService.PublishAsync("usage-tracking", usageMessage);
+            
+            // Also send a message for monthly usage summary update
+            var monthlySummaryMessage = new MonthlyUsageSummaryMessage
+            {
+                UserId = userId,
+                Year = DateTime.UtcNow.Year,
+                Month = DateTime.UtcNow.Month,
+                EndpointPath = context.Request.Path.Value ?? "",
+                RequestCount = 1,
+                TotalResponseTimeMs = responseTimeMs,
+                LastUpdated = DateTime.UtcNow
+            };
+            
+            await _messageQueueService.PublishAsync("monthly-usage-summary", monthlySummaryMessage);
         }
         catch (Exception ex)
         {
@@ -181,45 +211,30 @@ public class RateLimitingMiddleware
 
     private static async Task WriteRateLimitResponse(HttpContext context, RateLimitInfo rateLimitInfo)
     {
-        context.Response.StatusCode = 429; // Too Many Requests
+        context.Response.StatusCode = 429;
         context.Response.ContentType = "application/json";
 
-        // Determine if it's a rate limit or quota violation
-        bool isRateLimitViolation = rateLimitInfo.LimitExceededReason?.Contains("Rate limit") ?? false;
-        int retryAfterSeconds = isRateLimitViolation ? 5 : 86400; // 5 seconds for rate limit, 24 hours for quota
-
-        // Set appropriate headers based on violation type
+        // Add rate limit headers
         context.Response.Headers["X-RateLimit-Limit"] = rateLimitInfo.RateLimit.ToString();
         context.Response.Headers["X-RateLimit-Remaining"] = "0";
-        context.Response.Headers["X-RateLimit-Reset"] = DateTimeOffset.UtcNow.AddSeconds(retryAfterSeconds).ToUnixTimeSeconds().ToString();
-        context.Response.Headers["Retry-After"] = retryAfterSeconds.ToString();
-        
-        // For monthly quota, add additional headers
-        if (!isRateLimitViolation)
-        {
-            context.Response.Headers["X-Monthly-Quota-Limit"] = rateLimitInfo.MonthlyQuota.ToString();
-            context.Response.Headers["X-Monthly-Quota-Used"] = rateLimitInfo.CurrentMonthUsage.ToString();
-            context.Response.Headers["X-Monthly-Quota-Reset-Date"] = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1).AddMonths(1).ToUniversalTime().ToString("R");
-        }
+        context.Response.Headers["X-RateLimit-Reset"] = DateTimeOffset.UtcNow.AddSeconds(60).ToUnixTimeSeconds().ToString();
+        context.Response.Headers["Retry-After"] = "60";
 
-        // Create simplified response with guidance on how to resolve the issue
-        var response = new 
+        var response = new RateLimitViolationResponse
         {
             Error = "Rate limit exceeded",
-            Message = (rateLimitInfo.LimitExceededReason ?? "Rate limit exceeded") + (isRateLimitViolation 
-                ? " Please reduce your request rate or upgrade to a higher tier for increased limits."
-                : " You have exceeded your monthly quota. Please upgrade your subscription tier for additional requests."),
-            RetryAfterSeconds = retryAfterSeconds,
-            Headers = new 
+            Message = rateLimitInfo.LimitExceededReason ?? "Rate limit exceeded",
+            RetryAfterSeconds = 60,
+            Headers = new RateLimitHeaders
             {
-                Limit = isRateLimitViolation ? rateLimitInfo.RateLimit : rateLimitInfo.MonthlyQuota,
+                Limit = rateLimitInfo.RateLimit,
                 Remaining = 0,
-                ResetTime = DateTimeOffset.UtcNow.AddSeconds(retryAfterSeconds).ToUnixTimeSeconds(),
-                RetryAfter = retryAfterSeconds
+                ResetTime = DateTimeOffset.UtcNow.AddSeconds(60).ToUnixTimeSeconds(),
+                RetryAfter = 60
             }
         };
 
-        var json = JsonSerializer.Serialize(response, new JsonSerializerOptions { WriteIndented = true });
+        var json = JsonSerializer.Serialize(response);
         await context.Response.WriteAsync(json);
     }
 }

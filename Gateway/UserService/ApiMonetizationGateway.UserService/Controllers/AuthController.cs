@@ -151,7 +151,6 @@ public AuthController(ApiMonetizationContext context, IJwtService jwtService, Ap
         var tier = await _context.Tiers.FirstOrDefaultAsync(t => t.Id == activeTierId && t.IsActive);
         if (tier != null)
         {
-            // Store tier information in Redis
             var cacheKey = $"rate_limit_info_user:{user.Id}";
             var info = new RateLimitInfo
             {
@@ -164,14 +163,6 @@ public AuthController(ApiMonetizationContext context, IJwtService jwtService, Ap
                 IsWithinLimits = true
             };
             await _redis.SetAsync(cacheKey, info, TimeSpan.FromDays(1));
-            
-            // Store current month usage counter
-            var usageKey = $"monthly_usage_user:{user.Id}:{DateTime.UtcNow:yyyyMM}";
-            await _redis.SetAsync(usageKey, "0", TimeSpan.FromDays(35)); // Ensure it lasts for the whole month
-            
-            // Store rate limit counter for per-second tracking
-            var rateLimitKey = $"rate_limit_counter_user:{user.Id}";
-            await _redis.SetAsync(rateLimitKey, "0", TimeSpan.FromSeconds(5)); // Reset every 5 seconds
         }
 
         return Ok(AuthResponse.CreateSuccess(token, expiresAt, userDto));

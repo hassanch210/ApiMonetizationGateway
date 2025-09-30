@@ -1,13 +1,11 @@
 using Microsoft.AspNetCore.Mvc;
 using ApiMonetizationGateway.Shared.DTOs;
 using ApiMonetizationGateway.UserService.Services;
-using Microsoft.AspNetCore.Authorization;
 
 namespace ApiMonetizationGateway.UserService.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Authorize]
 public class UsersController : ControllerBase
 {
     private readonly IUserService _userService;
