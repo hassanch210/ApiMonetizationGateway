@@ -5,6 +5,7 @@ using StackExchange.Redis;
 using RabbitMQ.Client;
 using ApiMonetizationGateway.Shared.Data;
 using ApiMonetizationGateway.Shared.Services;
+using ApiMonetizationGateway.Shared.Extensions;
 using ApiMonetizationGateway.Gateway.Middleware;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
@@ -137,6 +138,9 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
+
+// Use our custom JWT authentication middleware
+app.UseJwtAuthentication();
 
 // Add JWT authentication middleware
 app.UseAuthentication();

@@ -3,6 +3,7 @@ using ApiMonetizationGateway.Shared.Data;
 using ApiMonetizationGateway.UserService.Services;
 using StackExchange.Redis;
 using ApiMonetizationGateway.Shared.Services;
+using ApiMonetizationGateway.Shared.Extensions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
@@ -171,6 +172,9 @@ using (var scope = app.Services.CreateScope())
 app.UseHttpsRedirection();
 app.UseCors("AllowAll");
 app.UseRouting();
+
+// Use our custom JWT authentication middleware
+app.UseJwtAuthentication();
 
 app.UseAuthentication();
 app.UseAuthorization();
