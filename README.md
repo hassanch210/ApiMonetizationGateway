@@ -265,16 +265,63 @@ Access RabbitMQ management interface:
 4. **Performance**: Redis caching and async message processing
 5. **Reliability**: Graceful error handling and fallback mechanisms
 
+## Unit Tests: Rate Limit Logic
+
+Unit tests have been added to validate the rate limiting behavior in the Gateway middleware.
+
+Location:
+- Tests/ApiMonetizationGateway.Tests/RateLimitingMiddlewareTests.cs
+
+What is covered:
+- Within limits: request proceeds (Status 200), next middleware is invoked
+- Monthly quota exceeded: response 429, Retry-After header present, monthly counter decremented
+- Per-second rate exceeded: response 429, Retry-After header present, second counter decremented
+
+Run tests:
+```bash
+# From repo root
+ dotnet test Tests/ApiMonetizationGateway.Tests/ApiMonetizationGateway.Tests.csproj -c Debug
+```
+
+## Docker Images and Compose
+
+Dockerfiles are provided for each service at the repo root:
+- Dockerfile.gateway
+- Dockerfile.userservice
+- Dockerfile.tierservice
+- Dockerfile.billingservice
+- Dockerfile.usage
+
+A ready-to-run docker-compose.yml is included at the repo root to start all infrastructure and services.
+
+Quick start with Docker:
+```bash
+# Build and run all services + dependencies
+ docker compose up --build
+
+# Gateway will be at
+ http://localhost:5000
+
+# UserService Swagger
+ http://localhost:5001/swagger
+```
+
+Environment (override in compose as needed):
+- SQL Server: SA password defaults to Your_password123 (change before real use)
+- Redis: redis:6379
+- JWT: defaults provided in compose for demo
+
+Notes:
+- The compose file maps the following ports: 5000 (gateway), 5001 (userservice), 5055 (tierservice), 5004 (billing), 5287 (usage), 6379 (redis), 1433 (sql), 5672/15672 (rabbitmq)
+- The services create the database on first run (EnsureCreated).
+
 ## Next Steps
 
 To complete the full implementation, you would need to:
 
-1. Implement the Usage Tracking Service
-2. Implement the Background Billing Service
-3. Add Docker containers and docker-compose
-4. Add comprehensive unit and integration tests
-5. Implement proper logging and monitoring
-6. Add authentication and authorization
-7. Optimize for production deployment
+1. Implement the remaining production-grade features in Usage Tracking and Billing
+2. Harden security, logging, and monitoring
+3. Expand unit and integration tests across services
+4. Optimize for production deployment (containers/orchestration/observability)
 
 This architecture provides a solid foundation for a production-ready API monetization platform with clean code, proper separation of concerns, and industry best practices.

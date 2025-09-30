@@ -161,7 +161,7 @@ public AuthController(ApiMonetizationContext context, IJwtService jwtService, Ap
                 MonthlyQuota = (int)userTier.Tier.MonthlyQuota,
                 ExpiresAt = DateTime.UtcNow.AddDays(1)
             };
-            await _redis.SetAsync($"user_tier:{user.Id}", userTierInfo, TimeSpan.FromDays(1));
+await _redis.SetAsync($"user_tier_info:{user.Id}", userTierInfo, TimeSpan.FromDays(1));
 
             // Get current month usage from MonthlyUsageSummary table and cache
             var currentMonth = DateTime.UtcNow;

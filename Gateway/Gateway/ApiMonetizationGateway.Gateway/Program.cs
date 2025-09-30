@@ -156,7 +156,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                     }
                     
                     // Store user tier info in context for rate limiting
-                    var userTierKey = $"user_tier:{userId}";
+var userTierKey = $"user_tier_info:{userId}";
                     var userTier = await redis.GetAsync<ApiMonetizationGateway.Shared.DTOs.UserTierInfoDto>(userTierKey);
                     if (userTier != null)
                     {
@@ -176,12 +176,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
-builder.Services.AddAuthorization(options =>
-{
-    options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
-        .RequireAuthenticatedUser()
-        .Build();
-});
+// Authorization is controlled by Ocelot route AuthenticationOptions; no global fallback policy.
+builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
@@ -197,6 +193,10 @@ app.UseCors("AllowAll");
 
 // Add JWT authentication middleware
 app.UseAuthentication();
+
+// Enforce JWT for all protected routes prior to rate limiting and Ocelot
+app.UseMiddleware<JwtEnforcementMiddleware>();
+
 app.UseAuthorization();
 
 // Add rate limiting middleware before Ocelot

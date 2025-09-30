@@ -30,7 +30,21 @@ public class RedisService : IRedisService
         if (!value.HasValue)
             return null;
 
-        return JsonSerializer.Deserialize<T>(value!, _jsonOptions);
+        // Special-case strings: values may be stored as raw strings (non-JSON)
+        if (typeof(T) == typeof(string))
+        {
+            return value.ToString() as T;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<T>(value!, _jsonOptions);
+        }
+        catch
+        {
+            // If deserialization fails (e.g., stale or non-JSON data), return null to avoid crashing middleware
+            return null;
+        }
     }
 
     public async Task SetAsync(string key, string value, TimeSpan? expiry = null)

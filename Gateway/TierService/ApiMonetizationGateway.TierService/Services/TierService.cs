@@ -171,8 +171,8 @@ public class TierService : ITierService
                 return ApiResponse<bool>.CreateError("Tier not found");
             }
 
-            // Check if any users are using this tier
-            var usersCount = await _context.Users.CountAsync(u => u.TierId == id && u.IsActive);
+            // Check if any users are using this tier via active UserTier associations
+            var usersCount = await _context.UserTiers.CountAsync(ut => ut.TierId == id && ut.IsActive);
             if (usersCount > 0)
             {
                 return ApiResponse<bool>.CreateError($"Cannot deactivate tier. {usersCount} active users are using this tier.");

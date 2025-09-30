@@ -49,7 +49,7 @@ public class RateLimitingMiddleware
         // If not available in context, try to get from Redis directly
         if (userTier == null)
         {
-            var userTierKey = $"user_tier:{userId}";
+var userTierKey = $"user_tier_info:{userId}";
             userTier = await _redisService.GetAsync<UserTierInfoDto>(userTierKey);
             
             // If still not available, fall back to database and cache in Redis
@@ -95,8 +95,11 @@ public class RateLimitingMiddleware
         await _next(context);
         stopwatch.Stop();
         
-        // Track usage asynchronously via RabbitMQ
-        _ = Task.Run(() => TrackUsage(context, rateLimitInfo.UserId, stopwatch.ElapsedMilliseconds));
+        // Track usage asynchronously via RabbitMQ (only for successful 2xx responses)
+        if (context.Response.StatusCode >= 200 && context.Response.StatusCode < 300)
+        {
+            _ = Task.Run(() => TrackUsage(context, rateLimitInfo.UserId, stopwatch.ElapsedMilliseconds));
+        }
     }
     
     private async Task<UserTierInfoDto?> GetUserTierFromDatabase(int userId)

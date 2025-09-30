@@ -3,7 +3,6 @@ using ApiMonetizationGateway.Shared.Data;
 using ApiMonetizationGateway.UserService.Services;
 using StackExchange.Redis;
 using ApiMonetizationGateway.Shared.Services;
-using RabbitMQ.Client;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
@@ -73,20 +72,6 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(provider =>
     return ConnectionMultiplexer.Connect(connectionString);
 });
 builder.Services.AddSingleton<IRedisService, RedisService>();
-
-// RabbitMQ configuration (for direct service usage tracking if bypassing gateway)
-builder.Services.AddSingleton<IConnection>(provider =>
-{
-    var factory = new ConnectionFactory()
-    {
-        HostName = builder.Configuration.GetValue<string>("RabbitMQ:HostName") ?? "localhost",
-        Port = builder.Configuration.GetValue<int>("RabbitMQ:Port", 5672),
-        UserName = builder.Configuration.GetValue<string>("RabbitMQ:UserName") ?? "guest",
-        Password = builder.Configuration.GetValue<string>("RabbitMQ:Password") ?? "guest"
-    };
-    return factory.CreateConnection();
-});
-builder.Services.AddSingleton<IMessageQueueService, RabbitMQService>();
 
 // CORS configuration
 builder.Services.AddCors(options =>
@@ -190,9 +175,6 @@ app.UseRouting();
 
 app.UseAuthentication();
 app.UseAuthorization();
-
-// Enforce per-second and monthly quota even when hitting UserService directly (bypassing gateway)
-app.UseMiddleware<ApiMonetizationGateway.UserService.Middleware.EnforceRateLimitMiddleware>();
 
 app.MapControllers();
 
