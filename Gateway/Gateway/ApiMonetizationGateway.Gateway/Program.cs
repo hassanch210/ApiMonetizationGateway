@@ -33,14 +33,15 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
-    // Add JWT Bearer authorization
+    // Proper HTTP Bearer scheme so Swagger sends "Authorization: Bearer {token}"
     c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
     {
-        Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
+        Description = "Enter JWT. Example: Bearer {token}",
         Name = "Authorization",
         In = Microsoft.OpenApi.Models.ParameterLocation.Header,
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
     });
 
     c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement()
@@ -53,8 +54,8 @@ builder.Services.AddSwaggerGen(c =>
                     Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
                     Id = "Bearer"
                 },
-                Scheme = "oauth2",
-                Name = "Bearer",
+                Scheme = "bearer",
+                Name = "Authorization",
                 In = Microsoft.OpenApi.Models.ParameterLocation.Header,
             },
             new List<string>()
@@ -125,27 +126,42 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         {
             OnTokenValidated = async context =>
             {
-                var userId = context.Principal?.FindFirst("sub")?.Value;
-                if (!string.IsNullOrEmpty(userId))
+                var userIdClaim = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                if (!string.IsNullOrEmpty(userIdClaim) && int.TryParse(userIdClaim, out var userId))
                 {
-                    // Check if token is in Redis (valid)
-                    var redis = context.HttpContext.RequestServices.GetRequiredService<IRedisService>();
-                    var tokenKey = $"valid_token:{userId}";
-                    var storedToken = await redis.GetAsync<string>(tokenKey);
+                    // Get the actual JWT token from the request
+                    var token = context.Request.Headers.Authorization.ToString().Replace("Bearer ", "");
                     
-                    // If token not found in Redis, it might have been revoked
-                    if (string.IsNullOrEmpty(storedToken))
+                    // Validate token against database
+                    using var scope = context.HttpContext.RequestServices.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<ApiMonetizationContext>();
+                    var validToken = await db.UserTokens
+                        .FirstOrDefaultAsync(t => t.UserId == userId && t.Token == token && t.IsActive && t.ExpiresAt > DateTime.UtcNow);
+                    
+                    if (validToken == null)
                     {
                         context.Fail("Token has been revoked or is invalid");
                         return;
                     }
                     
+                    // Check if token is cached in Redis for performance
+                    var redis = context.HttpContext.RequestServices.GetRequiredService<IRedisService>();
+                    var tokenKey = $"valid_token:{userId}";
+                    var storedToken = await redis.GetAsync<string>(tokenKey);
+                    
+                    // If token not found in Redis cache, cache it now
+                    if (string.IsNullOrEmpty(storedToken))
+                    {
+                        await redis.SetAsync(tokenKey, token, validToken.ExpiresAt - DateTime.UtcNow);
+                    }
+                    
                     // Store user tier info in context for rate limiting
                     var userTierKey = $"user_tier:{userId}";
-                    var userTier = await redis.GetAsync<UserTierInfo>(userTierKey);
+                    var userTier = await redis.GetAsync<ApiMonetizationGateway.Shared.DTOs.UserTierInfoDto>(userTierKey);
                     if (userTier != null)
                     {
                         context.HttpContext.Items["UserTier"] = userTier;
+                        context.HttpContext.Items["UserId"] = userId;
                     }
                 }
             },
@@ -153,7 +169,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             {
                 if (context.Exception.GetType() == typeof(SecurityTokenExpiredException))
                 {
-                    context.Response.Headers.Add("Token-Expired", "true");
+                    context.Response.Headers.Append("Token-Expired", "true");
                 }
                 return Task.CompletedTask;
             }

@@ -142,27 +142,41 @@ public AuthController(ApiMonetizationContext context, IJwtService jwtService, Ap
             IsActive = user.IsActive
         };
 
-        // Cache user profile for rate limiting in Redis (1 day)
-        var activeTierId = await _context.UserTiers
+        // Get user tier information for caching in Redis
+        var userTier = await _context.UserTiers
+            .Include(ut => ut.Tier)
             .Where(ut => ut.UserId == user.Id && ut.IsActive)
             .OrderByDescending(ut => ut.AssignedAt)
-            .Select(ut => ut.TierId)
             .FirstOrDefaultAsync();
-        var tier = await _context.Tiers.FirstOrDefaultAsync(t => t.Id == activeTierId && t.IsActive);
-        if (tier != null)
+
+        if (userTier?.Tier != null)
         {
-            var cacheKey = $"rate_limit_info_user:{user.Id}";
-            var info = new RateLimitInfo
+            // Cache user tier info for gateway middleware
+            var userTierInfo = new ApiMonetizationGateway.Shared.DTOs.UserTierInfoDto
             {
                 UserId = user.Id,
-                ApiKey = string.Empty,
-                TierId = activeTierId,
-                RateLimit = tier.RateLimit,
-                MonthlyQuota = tier.MonthlyQuota,
-                CurrentMonthUsage = 0,
-                IsWithinLimits = true
+                TierId = userTier.TierId,
+                TierName = userTier.Tier.Name,
+                RateLimit = userTier.Tier.RateLimit,
+                MonthlyQuota = (int)userTier.Tier.MonthlyQuota,
+                ExpiresAt = DateTime.UtcNow.AddDays(1)
             };
-            await _redis.SetAsync(cacheKey, info, TimeSpan.FromDays(1));
+            await _redis.SetAsync($"user_tier:{user.Id}", userTierInfo, TimeSpan.FromDays(1));
+
+            // Get current month usage from MonthlyUsageSummary table and cache
+            var currentMonth = DateTime.UtcNow;
+            var monthlyUsage = await _context.MonthlyUsageSummaries
+                .Where(m => m.UserId == user.Id && m.Year == currentMonth.Year && m.Month == currentMonth.Month)
+                .FirstOrDefaultAsync();
+
+            var currentMonthUsage = monthlyUsage?.TotalRequests ?? 0;
+            
+            // Cache monthly usage for rate limiting
+            var monthKey = $"monthly_usage:{user.Id}:{currentMonth:yyyyMM}";
+            await _redis.SetAsync(monthKey, currentMonthUsage.ToString(), TimeSpan.FromDays(35));
+
+            // Cache valid token for JWT validation in gateway
+            await _redis.SetAsync($"valid_token:{user.Id}", token, TimeSpan.FromDays(1));
         }
 
         return Ok(AuthResponse.CreateSuccess(token, expiresAt, userDto));

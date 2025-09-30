@@ -1,0 +1,87 @@
+API Monetization Gateway - Architecture Overview (Text)
+
+High-level Architecture
+
+[ Client Apps ]  --->  [ API Gateway (Ocelot, JWT, Rate Limiting) ]  --->  [ Microservices ]
+                                             |                         
+                                             |                         
+                                      [ Redis Cache ]                  
+                                             |                         
+                                          [ RabbitMQ ]                 
+                                             |                         
+                                         [ SQL Server ]                
+
+Components and Responsibilities
+
+1) API Gateway (Port 5000)
+- Validates JWT tokens against SQL Server (UserTokens table)
+- Loads/caches user tier info from Redis (user_tier:<userId>)
+- Enforces per-second rate limit (rate_limit:<userId>:<UnixSec>)
+- Enforces monthly quota (monthly_usage:<userId>:<YYYYMM>)
+- Publishes usage events to RabbitMQ:
+  • usage-tracking (per-request event)
+  • monthly-usage-summary (aggregate update)
+- Routes requests to downstream services via Ocelot
+
+2) User Service (Port 5001)
+- Registration and login endpoints
+- Issues JWT tokens (JwtService) on login
+- Persists tokens in SQL (UserTokens)
+- Determines active user tier and caches in Redis (user_tier:<userId>)
+- Initializes monthly usage cache from MonthlyUsageSummaries
+
+3) Usage Tracking Service (Port 5003)
+- Consumes RabbitMQ messages:
+  • usage-tracking -> writes ApiUsages records
+  • monthly-usage-summary -> upserts MonthlyUsageSummaries aggregates
+- Provides endpoints to query usage if needed
+
+4) Tier Service (Port 5002)
+- CRUD for tiers (Free/Pro/etc.)
+- Tiers define RateLimit (req/sec) and MonthlyQuota (req/month)
+- Data stored in SQL (Tiers), referenced by UserTiers
+
+5) Sample API Service (Port 5010)
+- Example business endpoints (Products, Weather)
+- Accessed via Gateway; Gateway applies auth and limits
+
+Data Stores
+- SQL Server (SHAHEER-SALEEM\SQLEXPRESS -> MonetizationGatewayDB)
+  • Users, Tiers, UserTiers, UserTokens
+  • ApiUsages (per-call logs)
+  • MonthlyUsageSummaries (aggregates per user per month)
+
+- Redis (localhost:6379)
+  • user_tier:<userId> -> {TierId, TierName, RateLimit, MonthlyQuota}
+  • monthly_usage:<userId>:<YYYYMM> -> counter
+  • rate_limit:<userId>:<UnixSeconds> -> counter (TTL=1s)
+  • valid_token:<userId> -> latest active token cache
+
+- RabbitMQ (localhost:5672, guest/guest)
+  • Queue: usage-tracking (per request event)
+  • Queue: monthly-usage-summary (aggregate updates)
+
+Request Flow
+1. Client calls Gateway with Authorization: Bearer <JWT>
+2. Gateway validates token against SQL; optionally confirms in Redis cache
+3. Gateway fetches user tier (from Redis or SQL, then caches)
+4. Gateway enforces per-second and monthly limits using Redis counters
+5. If within limits, request is routed to target microservice
+6. After response, Gateway publishes usage events to RabbitMQ
+7. Tracking Service consumes events and writes to SQL (ApiUsages / MonthlyUsageSummaries)
+
+Rate Limiting Details
+- Per-second: key=rate_limit:<userId>:<UnixSeconds>, INCR with TTL=1s
+- Monthly: key=monthly_usage:<userId>:<YYYYMM>, INCR with TTL ~35 days
+- On violation: decrement the counter and return HTTP 429 with retry headers
+
+Security Notes
+- Strong JWT secret; tokens persisted for revocation support
+- HTTPS recommended in production
+- Principle of least privilege for DB and MQ credentials
+
+Scalability Notes
+- Gateway and services are stateless -> horizontal scaling
+- Redis for fast counters and caching
+- RabbitMQ decouples write path from analytics persistence
+- SQL indices on key columns (UserId, timestamps) for reporting

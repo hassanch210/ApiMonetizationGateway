@@ -26,14 +26,15 @@ builder.Services.AddSwaggerGen(c =>
         }
     });
 
-    // Add JWT Bearer authorization
+    // Proper HTTP Bearer scheme so Swagger sends "Authorization: Bearer {token}"
     c.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
     {
-        Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
+        Description = "Enter JWT. Example: Bearer {token}",
         Name = "Authorization",
         In = Microsoft.OpenApi.Models.ParameterLocation.Header,
-        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
     });
 
     c.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement()
@@ -46,8 +47,8 @@ builder.Services.AddSwaggerGen(c =>
                     Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
                     Id = "Bearer"
                 },
-                Scheme = "oauth2",
-                Name = "Bearer",
+                Scheme = "bearer",
+                Name = "Authorization",
                 In = Microsoft.OpenApi.Models.ParameterLocation.Header,
             },
             new List<string>()

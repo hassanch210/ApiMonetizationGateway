@@ -44,13 +44,13 @@ public class RateLimitingMiddleware
         }
 
         // Get user tier info from Redis (populated during JWT validation)
-        var userTier = context.Items["UserTier"] as UserTierInfo;
+        var userTier = context.Items["UserTier"] as UserTierInfoDto;
         
         // If not available in context, try to get from Redis directly
         if (userTier == null)
         {
             var userTierKey = $"user_tier:{userId}";
-            userTier = await _redisService.GetAsync<UserTierInfo>(userTierKey);
+            userTier = await _redisService.GetAsync<UserTierInfoDto>(userTierKey);
             
             // If still not available, fall back to database and cache in Redis
             if (userTier == null)
@@ -99,7 +99,7 @@ public class RateLimitingMiddleware
         _ = Task.Run(() => TrackUsage(context, rateLimitInfo.UserId, stopwatch.ElapsedMilliseconds));
     }
     
-    private async Task<UserTierInfo?> GetUserTierFromDatabase(int userId)
+    private async Task<UserTierInfoDto?> GetUserTierFromDatabase(int userId)
     {
         using var scope = _serviceScopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ApiMonetizationContext>();
@@ -117,7 +117,7 @@ public class RateLimitingMiddleware
         var tier = await db.Tiers.FirstOrDefaultAsync(t => t.Id == userTier.TierId && t.IsActive);
         if (tier == null) return null;
         
-        return new UserTierInfo
+        return new UserTierInfoDto
         {
             UserId = userId,
             TierId = (int)tier.Id,
@@ -146,8 +146,10 @@ public class RateLimitingMiddleware
         
         if (monthCount > info.MonthlyQuota)
         {
+            // Decrement the counter since we're rejecting the request
+            await _redisService.DecrementAsync(monthKey, 1);
             info.IsWithinLimits = false;
-            info.LimitExceededReason = "Monthly quota exceeded";
+            info.LimitExceededReason = "Monthly quota has been reached";
             return info;
         }
 
@@ -157,8 +159,10 @@ public class RateLimitingMiddleware
 
         if (currentRequests > info.RateLimit)
         {
+            // Decrement the rate limit counter since we're rejecting the request
+            await _redisService.DecrementAsync(rateLimitKey, 1);
             info.IsWithinLimits = false;
-            info.LimitExceededReason = "Rate limit exceeded";
+            info.LimitExceededReason = "API rate limit per second has been reached";
             return info;
         }
 
@@ -190,7 +194,7 @@ public class RateLimitingMiddleware
             await _messageQueueService.PublishAsync("usage-tracking", usageMessage);
             
             // Also send a message for monthly usage summary update
-            var monthlySummaryMessage = new MonthlyUsageSummaryMessage
+            var monthlySummaryMessage = new ApiMonetizationGateway.Shared.DTOs.MonthlyUsageSummaryMessage
             {
                 UserId = userId,
                 Year = DateTime.UtcNow.Year,
@@ -215,22 +219,26 @@ public class RateLimitingMiddleware
         context.Response.ContentType = "application/json";
 
         // Add rate limit headers
+        var retryAfterSeconds = rateLimitInfo.LimitExceededReason?.Contains("monthly", StringComparison.OrdinalIgnoreCase) == true 
+            ? (int)(DateTime.UtcNow.AddMonths(1).AddDays(-DateTime.UtcNow.Day + 1) - DateTime.UtcNow).TotalSeconds
+            : 60;
+            
         context.Response.Headers["X-RateLimit-Limit"] = rateLimitInfo.RateLimit.ToString();
         context.Response.Headers["X-RateLimit-Remaining"] = "0";
-        context.Response.Headers["X-RateLimit-Reset"] = DateTimeOffset.UtcNow.AddSeconds(60).ToUnixTimeSeconds().ToString();
-        context.Response.Headers["Retry-After"] = "60";
+        context.Response.Headers["X-RateLimit-Reset"] = DateTimeOffset.UtcNow.AddSeconds(retryAfterSeconds).ToUnixTimeSeconds().ToString();
+        context.Response.Headers["Retry-After"] = retryAfterSeconds.ToString();
 
         var response = new RateLimitViolationResponse
         {
             Error = "Rate limit exceeded",
-            Message = rateLimitInfo.LimitExceededReason ?? "Rate limit exceeded",
-            RetryAfterSeconds = 60,
+            Message = rateLimitInfo.LimitExceededReason ?? "The quota has been reached",
+            RetryAfterSeconds = retryAfterSeconds,
             Headers = new RateLimitHeaders
             {
                 Limit = rateLimitInfo.RateLimit,
                 Remaining = 0,
-                ResetTime = DateTimeOffset.UtcNow.AddSeconds(60).ToUnixTimeSeconds(),
-                RetryAfter = 60
+                ResetTime = DateTimeOffset.UtcNow.AddSeconds(retryAfterSeconds).ToUnixTimeSeconds(),
+                RetryAfter = retryAfterSeconds
             }
         };
 
