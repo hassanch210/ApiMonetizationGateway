@@ -133,7 +133,7 @@ public class RateLimitingMiddleware
         var monthKey = $"monthly_usage:{userId}:{DateTime.UtcNow:yyyyMM}";
         var monthCount = await _redisService.GetAsync<string>(monthKey);
         return string.IsNullOrEmpty(monthCount) ? 0 : int.Parse(monthCount);
-    }
+    } 
 
     private async Task<RateLimitInfo> CheckRateLimits(RateLimitInfo info)
     {
